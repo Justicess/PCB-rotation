@@ -1,0 +1,669 @@
+import tkinter as tk
+from tkinter import ttk, filedialog
+import serial
+import time
+import cv2
+from PIL import Image, ImageTk
+from tkinter.filedialog import askopenfile
+import os
+import numpy as np
+from functools import partial
+
+
+from skimage.metrics import structural_similarity as ssim
+from skimage import io, color
+
+# import cameraV as cameraToUse
+import serial.tools.list_ports
+
+ports = serial.tools.list_ports.comports()
+
+boxes_cooradinates = []
+one_box = []
+
+global firstValue
+firstValue = True
+
+# COM port pasirinkimas
+while firstValue:
+    numbers = 0
+
+    def getSelectedValue():
+        indices = listbox.get(listbox.curselection())  # Gaunama com port verte
+        print(indices)
+        global portToWrite
+        portToWrite = indices
+
+        if indices != " ":
+            global numbers
+            numbers += 1
+
+        return indices
+
+    root = tk.Tk()
+    root.title("Robotics")
+    root.minsize(300, 400)
+    root.columnconfigure(0, weight=2)
+    root.columnconfigure(1, weight=1)
+
+    root.rowconfigure(0, weight=2)
+    root.rowconfigure(1, weight=2)
+    root.rowconfigure(2, weight=2)
+
+    listbox = tk.Listbox(
+        root,
+        height=10,
+        width=20,
+        bg="white",
+        activestyle="dotbox",
+        font="Helvetica",
+        fg="black",
+    )
+
+    for port in sorted(ports):
+        listbox.insert(tk.END, str(port).split(None, 1)[0])
+
+    # Mygtukai
+    quitButton = tk.Button(root, text="Close", command=root.destroy)
+
+    get_selection_button = tk.Button(
+        text="Select port", command=getSelectedValue
+    )  # Mygtukas gauti com port verte
+
+    label = tk.Label(root, text="Com ports", font=("Times", 20, "bold"))
+
+    # Nustatymai
+    label.grid(column=0, row=0)
+    quitButton.grid(column=1, row=1)
+    listbox.grid(column=0, row=1)
+    get_selection_button.grid(column=1, row=0)
+
+    root.mainloop()
+    if numbers != 0:
+        firstValue = False
+        print(str(portToWrite) + "Labas")
+
+# Funkcijos
+
+
+# Get input values to rotate images
+def get_inputs():
+    input1 = entry_first.get()
+    input2 = entry_first_bad.get()
+    list_return = [input1, input2]
+    return list_return
+
+
+# Show photos angles
+
+
+def show_value(angle, photo):
+    if photo == "First":
+        label_angle.config(text=f"Angle: {angle[0]}")
+    elif photo == "Second":
+        label_angle_bad.config(text=f"Angle: {angle[0]}")
+
+
+# Angle of pictures
+
+
+def angle(image):
+
+    imS = np.array(Image.open(image))
+
+    imS = cv2.resize(imS, (960, 1240))
+    gray = cv2.cvtColor(imS, cv2.COLOR_BGR2GRAY)  # Keiciamos pikselio spalvos i pilka
+
+    blur = cv2.GaussianBlur(
+        gray, (5, 5), cv2.BORDER_DEFAULT
+    )  # bluras sumazinti triuksmus ieskant kampu
+    ret, thresh = cv2.threshold(
+        blur, 110, 255, cv2.THRESH_BINARY
+    )  # Vaizdas keiciamas i juoda arba balta spalva
+
+    cv2.imshow("origi", thresh)
+    cv2.waitKey(0)
+    # Daroma erozija isimti triuksmus
+    for i in range(0, 14):
+        eroded = cv2.erode(thresh.copy(), None, iterations=i + 1)
+
+    # gaunamas bendras vaizdas baltame fone juoda pcb
+    inverted_binary = ~eroded
+
+    contours, hierarchy = cv2.findContours(
+        inverted_binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    for i, c in enumerate(contours):
+
+        # Calculate the area of each contour
+        area = cv2.contourArea(c)
+
+        # Ignore contours that are too small or too large
+        if area < 3700 or 100000 < area:
+            continue
+
+    rect = cv2.minAreaRect(c)
+    box = cv2.boxPoints(rect)
+    print(box)
+    box = np.int0(box)
+    # Retrieve the key parameters of the rotated bounding box
+    center = (int(rect[0][0]), int(rect[0][1]))
+    width = int(rect[1][0])
+    height = int(rect[1][1])
+    angle = int(rect[2])
+    with_contours = cv2.drawContours(imS, [box], -1, (255, 0, 255), 3)
+    values_to_return = [angle, width, height, box[0][0], box[0][1]]
+    return values_to_return
+
+
+def format_for_pill(change_fromat):
+    blue, green, red = cv2.split(change_fromat)
+    img12 = cv2.merge((red, green, blue))
+    im = Image.fromarray(img12)
+    imgtkk = im.resize((round(im.size[0] * 0.5), round(im.size[1] * 0.5)))
+    img_to_show_user = im.resize((round(im.size[0] * 0.5), round(im.size[1] * 0.5)))
+    imgtkk = ImageTk.PhotoImage(imgtkk)
+    user_photos = [imgtkk, img_to_show_user]
+    return user_photos
+
+
+def show_image_canva(pathas, photo_parameter):
+    global img_to_show, imgtk, image1
+    angle_of_image = angle(pathas)
+    first_pic = "First"
+    show_value(angle_of_image, first_pic)
+    image1 = cv2.imread(pathas)
+    photos = format_for_pill(image1)
+    imgtk = photos[0]
+    img_to_show = photos[1]
+    if photo_parameter == "first":
+        canvas.itemconfig(canvas_image, image=imgtk)
+
+
+def show_image_canva_bad(pathas2, photo_parameter):
+    global img_to_show2, imgtk_bad, image2
+    angle_of_image = angle(pathas2)
+    second_pic = "Second"
+    show_value(angle_of_image, second_pic)
+    image2 = cv2.imread(pathas2)
+    blue, green, red = cv2.split(image2)
+    img122 = cv2.merge((red, green, blue))
+    im2 = Image.fromarray(img122)
+    imgtk_bad = im2.resize((round(im2.size[0] * 0.5), round(im2.size[1] * 0.5)))
+    img_to_show2 = im2.resize((round(im2.size[0] * 0.5), round(im2.size[1] * 0.5)))
+    imgtk_bad = ImageTk.PhotoImage(imgtk_bad)
+    if photo_parameter == "second":
+        canvas_bad_image.itemconfig(canvas_image_bad, image=imgtk_bad)
+
+
+def select_roi_image():
+    global pil_image
+    numpy_image = np.array(imgtkkk)
+    r = cv2.selectROI("select the area", numpy_image)
+
+    # Crop image
+    cropped_image = numpy_image[
+        int(r[1]) : int(r[1] + r[3]),
+        int(r[0]) : int(r[0] + r[2]),
+    ]
+
+    # Display cropped image
+    cv2.imshow("Cropped image", cropped_image)
+    cv2.waitKey(0)
+    color_converted = cv2.cvtColor(cropped_image, cv2.COLOR_BGR2RGB)
+    pil_image = Image.fromarray(color_converted)
+    pil_image = ImageTk.PhotoImage(pil_image)
+    canvas.itemconfig(canvas_image, image=pil_image)
+
+
+# Rotate images
+
+
+def rotate_image_work():
+    global imgtkkk, imgtkkk2, rotated_image, rotated_image_2, rotated_scale_down_1, rotated_scale_down_2
+    angle_photo = get_inputs()
+    first_angle = float(angle_photo[0])
+    second_angle = float(angle_photo[1])
+    image_good = image1
+    image_bad = image2
+    (h, w) = image_good.shape[:2]
+    (h, w) = image_bad.shape[:2]
+
+    # Define the center of the image
+    center = (w // 2, h // 2)
+    center2 = (w // 2, h // 2)
+
+    # Define the rotation angle and scale
+    angle = first_angle  # Rotate by 45 degrees
+    angle2 = second_angle
+    scale = 1  # No scaling
+
+    # Get the rotation matrix using cv2.getRotationMatrix2D
+    rotation_matrix = cv2.getRotationMatrix2D(center, angle, scale)
+    rotation_matrix2 = cv2.getRotationMatrix2D(center2, angle2, scale)
+    # Apply the rotation using cv2.warpAffine
+    rotate_image = cv2.warpAffine(image_good, rotation_matrix, (w, h))
+    rotate_image_2 = cv2.warpAffine(image_bad, rotation_matrix2, (w, h))
+    rotated_image = cv2.resize(rotate_image, (960, 1240))
+    # Get the dimensions of the image
+    height, width = rotate_image.shape[:2]
+
+    scale_factor = 0.3
+    new_width = int(width * scale_factor)
+    new_height = int(height * scale_factor)
+
+    rotated_scale_down_1 = cv2.resize(
+        rotate_image, (new_width, new_height), interpolation=cv2.INTER_AREA
+    )
+    rotated_scale_down_2 = cv2.resize(
+        rotate_image_2, (new_width, new_height), interpolation=cv2.INTER_AREA
+    )
+
+    rotated_image_2 = cv2.resize(rotate_image_2, (960, 1240))
+    # lievas
+    coverted = format_for_pill(rotated_image)
+    coverted_bad = format_for_pill(rotated_image_2)
+    imgtkkk = coverted[0]
+    imgtkkk2 = coverted_bad[0]
+    canvas.itemconfig(canvas_image, image=imgtkkk)
+    canvas_bad_image.itemconfig(canvas_image_bad, image=imgtkkk2)
+    # return image
+
+
+# create box
+def create_one_box():
+    x1 = one_box[0][0]
+    y1 = one_box[0][1]
+    x2 = one_box[1][0]
+    y2 = one_box[1][1]
+    print(f"x1:{x1} x2:{x2} y1:{y1} y2:{y2}")
+    if one_box[0][0] != False or one_box[1][1] != False:
+        canvas_bad_image.create_rectangle(
+            (x1), (y1), (x2), (y2), outline="white"
+        )  # galima gauti kuri keturkampis
+        list_of_coordinates = [x1, y1, x2, y2]
+        boxes_cooradinates.append(
+            list_of_coordinates
+        )  # idedam koordinates i pagrindini lista ir trinamas laikinas one_box listas. Kad butu vietos kitam
+        one_box.clear()
+
+
+def compare_Box():
+    print(boxes_cooradinates[0])
+    x1 = boxes_cooradinates[0][0]
+    y1 = boxes_cooradinates[0][1]
+    x2 = boxes_cooradinates[0][2]
+    y2 = boxes_cooradinates[0][3]
+    height_y = y2 - y1
+    width_x = x2 - x1
+    print(height_y)
+    print(width_x)
+
+    roi = rotated_scale_down_1[
+        ((y1 + 100)) : ((y1 + 100)) + height_y, (x1 - 50) : (x1 - 50) + width_x
+    ]  # cia keisti nes bz kas cia pasidare         rotated_image
+    boxes_cooradinates.clear()  # laikina pagrindinio listo vieta trinama
+    img2 = image2  # cia antras img
+
+    roi2 = rotated_scale_down_2[
+        ((y1 + 100)) : (y1 + 100) + height_y, (x1 - 50) : (x1 - 50) + width_x
+    ]
+
+    gray_image1 = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    gray_image2 = cv2.cvtColor(roi2, cv2.COLOR_BGR2GRAY)
+    cv2.imshow("Nice1", gray_image1)
+
+    cv2.imshow("Nice2", gray_image2)
+    cv2.waitKey(0)
+    diff2 = cv2.absdiff(gray_image1, gray_image2)
+    total_difference2 = np.sum(diff2)
+    print(f" Grey scale number:   {total_difference2}")
+
+    if total_difference2 > 30000:
+        rectangle_1 = canvas_bad_image.create_rectangle(x1, y1, x2, y2, outline="red")
+    else:
+        rectangle_1 = canvas_bad_image.create_rectangle(x1, y1, x2, y2, outline="green")
+
+    pass
+
+
+def my_callback(event):
+    coordinates_to_return = (event.x, event.y)
+    one_box.append(coordinates_to_return)  # issaugomos koordinates, vienos dezes
+
+
+# Button functions
+def start_move(event):
+    canvas.scan_mark(event.x, event.y)
+
+
+def move_image(event):
+    canvas.scan_dragto(event.x, event.y, gain=1)
+
+
+def start_move_bad(event):
+    canvas_bad_image.scan_mark(event.x, event.y)
+
+
+def move_image_bad(event):
+    canvas_bad_image.scan_dragto(event.x, event.y, gain=1)
+
+
+def disable_movement():
+    canvas.unbind("<ButtonPress-1>")
+    canvas.unbind("<B1-Motion>")
+    canvas_bad_image.unbind("<ButtonPress-1>")
+    canvas_bad_image.unbind("<B1-Motion>")
+
+
+# Open photos and pass to canvas
+
+
+def open_file(photo_parameter):
+    file = filedialog.askopenfile(mode="r", filetypes=[("jpeg Files", "*.jpeg")])
+    if file:
+        filepath = os.path.abspath(file.name)
+        if photo_parameter == "first":
+            show_image_canva(filepath, photo_parameter)
+        elif photo_parameter == "second":
+            show_image_canva_bad(filepath, photo_parameter)
+
+
+# Pagrindine programa
+
+rootWindow = tk.Tk()
+rootWindow.title("Robotics")
+rootWindow.minsize(700, 800)
+tabControl = ttk.Notebook(rootWindow)
+
+program_tab = ttk.Frame(tabControl)  # program tab
+
+work_tab = ttk.Frame(tabControl)  # work program tab
+
+new_prgram_tab = ttk.Frame(tabControl)  # new program tab
+
+tabControl.add(work_tab, text="Test")
+tabControl.add(new_prgram_tab, text="New program")
+tabControl.add(program_tab, text="Program")
+tabControl.pack(expand=1, fill="both")
+
+# Widgets for work_tab
+program_label = tk.Label(work_tab, text="Programs", font=("Times", 20, "bold"))
+entry1 = tk.Entry(work_tab, width=50)
+arduino = serial.Serial(port=portToWrite, baudrate=9600, timeout=0.1)
+
+listbox_Programs = tk.Listbox(
+    work_tab,
+    height=10,
+    width=20,
+    bg="white",
+    activestyle="dotbox",
+    font="Helvetica",
+    fg="black",
+)
+# --------------------
+# Widgets for program
+
+quitButton = tk.Button(
+    program_tab, text="New box", font=("Times", 10, "bold"), command=create_one_box
+)  # new box
+
+compareButton = tk.Button(
+    program_tab, text="Compare", font=("Times", 10, "bold"), command=compare_Box
+)
+rotate_image_1 = tk.Button(
+    program_tab,
+    text="Rotate image",
+    font=("Times", 10, "bold"),
+    command=rotate_image_work,
+)
+rotate_image_bad = tk.Button(
+    program_tab, text="Rotate bad image", font=("Times", 10, "bold")
+)
+label_angle = tk.Label(program_tab, text="Angle:")
+label_angle_bad = tk.Label(program_tab, text="Angle")
+select_image = tk.Button(
+    program_tab,
+    text="Select image",
+    font=("Times", 10, "bold"),
+    command=select_roi_image,
+)
+stop_movement = tk.Button(
+    program_tab,
+    text="Stop movement",
+    font=("Times", 10, "bold"),
+    command=disable_movement,
+)
+select_file = tk.Button(
+    program_tab,
+    text="Select file",
+    font=("Times", 10, "bold"),
+    command=partial(open_file, "first"),
+)
+select_file2 = tk.Button(
+    program_tab,
+    text="Select second file",
+    font=("Times", 10, "bold"),
+    command=partial(open_file, "second"),
+)
+canvas = tk.Canvas(program_tab, width=700, height=900)
+placeholder = ImageTk.PhotoImage(Image.new("RGB", (250, 250), color=(255, 255, 255)))
+canvas_image = canvas.create_image(500, 500, image=placeholder)
+
+canvas_bad_image = tk.Canvas(program_tab, width=700, height=900)
+place_holder_bad = ImageTk.PhotoImage(
+    Image.new("RGB", (250, 250), color=(255, 255, 255))
+)
+canvas_image_bad = canvas_bad_image.create_image(500, 500, image=place_holder_bad)
+
+entry_first = tk.Entry(program_tab, font=("Times", 10, "bold"))
+entry_first_bad = tk.Entry(program_tab, font=("Times", 10, "bold"))
+
+# -------------------------
+# Widgets for new_prgram_tab
+
+var_x = tk.StringVar()
+var_y = tk.StringVar()
+
+new_pr_label = tk.Label(new_prgram_tab, text="Program name", font=("Times", 18, "bold"))
+entry1_new_name = tk.Entry(new_prgram_tab, width=50)
+
+x_coordinates = tk.Label(new_prgram_tab, text="X", font=("Times", 18, "bold"))
+y_coordinates = tk.Label(new_prgram_tab, text="Y", font=("Times", 18, "bold"))
+
+x_coordinates_label = tk.Label(
+    new_prgram_tab, textvariable=var_x, font=("Times", 12, "bold")
+)
+y_coordinates_label = tk.Label(
+    new_prgram_tab, textvariable=var_y, font=("Times", 12, "bold")
+)
+light_one = tk.Label(new_prgram_tab, text="Light one", font=("Times", 10))
+light_two = tk.Label(new_prgram_tab, text="Light two", font=("Times", 10))
+
+button_up = tk.Button(new_prgram_tab, text="UP", font=("Times", 10, "bold"))
+button_right = tk.Button(new_prgram_tab, text="RIGHT", font=("Times", 10, "bold"))
+button_left = tk.Button(new_prgram_tab, text="LEFT", font=("Times", 10, "bold"))
+button_down = tk.Button(new_prgram_tab, text="DOWN", font=("Times", 10, "bold"))
+
+scale_left = tk.Scale(new_prgram_tab, from_=0, to=100, orient=tk.VERTICAL)
+scale_right = tk.Scale(new_prgram_tab, from_=0, to=100, orient=tk.VERTICAL)
+
+
+var_x.set("X_value")
+var_y.set("Y_value")
+
+new_prgram_tab.columnconfigure(0, weight=1)
+new_prgram_tab.columnconfigure(1, weight=1)
+new_prgram_tab.columnconfigure(2, weight=1)
+new_prgram_tab.columnconfigure(3, weight=1)
+new_prgram_tab.columnconfigure(4, weight=1)
+new_prgram_tab.columnconfigure(5, weight=1)
+new_prgram_tab.columnconfigure(6, weight=1)
+new_prgram_tab.columnconfigure(7, weight=1)
+new_prgram_tab.columnconfigure(8, weight=1)
+
+new_prgram_tab.rowconfigure(0, weight=1)
+new_prgram_tab.rowconfigure(1, weight=1)
+new_prgram_tab.rowconfigure(2, weight=1)
+new_prgram_tab.rowconfigure(3, weight=1)
+new_prgram_tab.rowconfigure(4, weight=1)
+new_prgram_tab.rowconfigure(5, weight=1)
+new_prgram_tab.rowconfigure(6, weight=1)
+new_prgram_tab.rowconfigure(7, weight=1)
+new_prgram_tab.rowconfigure(8, weight=1)
+new_prgram_tab.rowconfigure(9, weight=1)
+
+# Define a widget work_tab
+
+work_tab.columnconfigure(0, weight=1)
+work_tab.columnconfigure(1, weight=1)
+work_tab.columnconfigure(2, weight=1)
+work_tab.columnconfigure(3, weight=1)
+
+work_tab.rowconfigure(0, weight=1)
+work_tab.rowconfigure(1, weight=1)
+work_tab.rowconfigure(2, weight=1)
+work_tab.rowconfigure(3, weight=1)
+
+# Define a widget program
+
+program_tab.columnconfigure(0, weight=1)
+program_tab.columnconfigure(1, weight=1)
+program_tab.columnconfigure(2, weight=1)
+program_tab.columnconfigure(3, weight=1)
+program_tab.columnconfigure(4, weight=1)
+program_tab.columnconfigure(5, weight=1)
+program_tab.columnconfigure(6, weight=1)
+
+program_tab.rowconfigure(0, weight=1)
+program_tab.rowconfigure(1, weight=1)
+program_tab.rowconfigure(2, weight=1)
+program_tab.rowconfigure(3, weight=1)
+program_tab.rowconfigure(4, weight=1)
+program_tab.rowconfigure(5, weight=1)
+program_tab.rowconfigure(6, weight=1)
+
+# Camera
+vid = cv2.VideoCapture(0)
+
+# Declare the width and height in variables
+width, height = 800, 600
+
+# Set the width and height
+vid.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+vid.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+
+# Define a widget new_prgram_tab
+camera_tab = tk.Label(new_prgram_tab)
+# _________________________________________
+
+# Functions
+
+
+def sendSelectedValue():
+    dataTosend = entry1.get()
+    dataTosend = dataTosend + "\r"
+    arduino.write(dataTosend.encode())
+    time.sleep(0.05)
+    data = arduino.readline()
+    print(data)
+
+
+def readData():
+    arduino.readline
+
+
+def open_camera():
+    # Capture the video frame by frame
+    _, frame = vid.read()
+
+    # Convert image from one color space to other
+    opencv_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
+
+    # Capture the latest frame and transform to image
+    captured_image = Image.fromarray(opencv_image)
+
+    # Convert captured image to photoimage
+    photo_image = ImageTk.PhotoImage(image=captured_image)
+
+    # Displaying photoimage in the label
+    camera_tab.photo_image = photo_image
+
+    # Configure image in the label
+    camera_tab.configure(image=photo_image)
+
+    # Repeat the same process after every 10 seconds
+    camera_tab.after(10, open_camera)
+
+
+def close_camera():
+    # Close camera
+    pass
+
+
+# pagrindines programos send mygtukas
+# place widget
+send_value_button = tk.Button(
+    work_tab, text="Send", command=sendSelectedValue
+)  # cia blogai lyg
+
+start_camera_button = tk.Button(
+    new_prgram_tab, text="Start camera", command=open_camera
+)
+
+# Program grid
+
+quitButton.grid(row=3, column=1)
+compareButton.grid(row=3, column=2)
+rotate_image_1.grid(row=1, column=1)
+rotate_image_bad.grid(row=1, column=3)
+select_file.grid(row=3, column=3)
+select_file2.grid(row=3, column=4)
+stop_movement.grid(row=3, column=0)
+select_image.grid(row=4, column=0)
+canvas.grid(row=2, column=2)
+canvas_bad_image.grid(row=2, column=4)
+
+label_angle.grid(row=2, column=1)
+label_angle_bad.grid(row=2, column=3)
+
+entry_first.grid(row=0, column=1)
+entry_first_bad.grid(row=0, column=3)
+canvas_bad_image.bind("<Button-3>", my_callback)
+
+canvas.bind("<ButtonPress-1>", start_move)
+canvas.bind("<B1-Motion>", move_image)
+
+canvas_bad_image.bind("<ButtonPress-1>", start_move_bad)
+canvas_bad_image.bind("<B1-Motion>", move_image_bad)
+
+# New program grid
+start_camera_button.grid(row=0, column=0)
+camera_tab.grid(row=2, column=4)
+new_pr_label.grid(row=1, column=0)
+entry1_new_name.grid(row=1, column=1)
+x_coordinates.grid(row=2, column=0)
+y_coordinates.grid(row=3, column=0)
+
+x_coordinates_label.grid(row=2, column=1)
+y_coordinates_label.grid(row=3, column=1)
+
+button_up.grid(row=6, column=1)
+button_left.grid(row=7, column=0)
+button_right.grid(row=7, column=2)
+button_down.grid(row=8, column=1)
+
+scale_left.grid(row=7, column=7)
+scale_right.grid(row=7, column=8)
+
+light_one.grid(row=6, column=7)
+light_two.grid(row=6, column=8)
+
+# Work program grid
+
+program_label.grid(row=0, column=0)
+listbox_Programs.grid(row=1, column=0, sticky="n")
+send_value_button.grid(row=0, column=1)
+entry1.grid(row=1, column=1, sticky="n")
+rootWindow.mainloop()
